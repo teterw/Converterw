@@ -36,3 +36,15 @@ elif args.mp4:
     youtube_to_mp4(args.url, args.out)
 else:
     print("Choose --mp3 or --mp4")
+
+# command list
+# python cli.py to run
+# -h = help
+# --mp3 , --mp4 = file type
+# --out {location} (file path or folder name)
+# yt needed it a place selection 
+# command example
+# python cli.py yt --mp3 --out downloads https://youtu.be/ddQ7YR0qQSo?si=QKMYohk3Mv9NSlax
+# meaning it download mp3 to folder downloads in this place
+# python cli.py yt --mp4 --out C:\Users\tetee\Documents\GitHub\Converter https://youtu.be/ddQ7YR0qQSo?si=QKMYohk3Mv9NSlax
+# download mp4 file to this github folder 
