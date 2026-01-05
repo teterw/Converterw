@@ -1,7 +1,11 @@
 import subprocess
 import os
+from pathlib import Path
 
-def download_mp3(url, out_dir):
+# Default to the Downloads folder
+DEFAULT_DOWNLOAD_DIR = str(Path.home() / "Downloads")
+
+def download_mp3(url, out_dir=DEFAULT_DOWNLOAD_DIR):
     if not url:
         raise ValueError("URL is empty")
 
@@ -16,7 +20,7 @@ def download_mp3(url, out_dir):
         url
     ], check=True)
 
-def download_mp4(url, out_dir):
+def download_mp4(url, out_dir=DEFAULT_DOWNLOAD_DIR):
     if not url:
         raise ValueError("URL is empty")
 
