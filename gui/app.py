@@ -9,7 +9,7 @@ def run_app():
     ctk.set_default_color_theme("blue")
 
     app = ctk.CTk()
-    app.title("YouTube Converter")
+    app.title("Converterw")
     app.geometry("520x480")
     app.resizable(False, False)
 
