@@ -1,6 +1,7 @@
 import subprocess
 import os
 import re
+import sys
 from pathlib import Path
 
 DEFAULT_DOWNLOAD_DIR = str(Path.home() / "Downloads")
@@ -12,7 +13,6 @@ PROGRESS_REGEX = re.compile(
 
 
 def is_playlist_only(url: str) -> bool:
-    # True playlist link
     return "youtube.com/playlist" in url and "list=" in url
 
 
@@ -38,11 +38,10 @@ def _download(url, out_dir, mode, progress_callback):
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # 🔑 Decide output path template
+    # Decide output path
     if is_playlist_only(url):
         output_template = f"{out_dir}/%(playlist_title)s/%(title)s.%(ext)s"
     else:
-        # Single video (even if playlist metadata exists)
         output_template = f"{out_dir}/%(title)s.%(ext)s"
 
     cmd = [
@@ -52,7 +51,7 @@ def _download(url, out_dir, mode, progress_callback):
         url
     ]
 
-    # 🔑 Force single-video behavior when needed
+    # Force single-video behavior
     if is_video_in_playlist(url) and not is_playlist_only(url):
         cmd.append("--no-playlist")
 
@@ -61,13 +60,18 @@ def _download(url, out_dir, mode, progress_callback):
     else:
         cmd += ["-f", "bv*+ba/best", "--merge-output-format", "mp4"]
 
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NO_WINDOW
+
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         encoding="utf-8",
-        errors="ignore"
+        errors="ignore",
+        creationflags=creationflags
     )
 
     for line in process.stdout:
