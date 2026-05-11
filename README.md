@@ -1,3 +1,5 @@
+**IT IS CURRENTLY BROKE AND AM TOO LAZY TO FIX RIGHT NOW SO PLEASE DON't USE IT YET**
+
 **YouTube Converter (MP3 / MP4)**
 
 A simple YouTube to MP3 / MP4 converter written in Python with a graphical interface.
