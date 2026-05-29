@@ -1,50 +1,47 @@
 import argparse
-import subprocess
+import sys
 import os
 
-def youtube_to_mp3(url, out):
-    subprocess.run([
-        "yt-dlp",
-        "-x",
-        "--audio-format", "mp3",
-        "-o", f"{out}/%(title)s.%(ext)s",
-        url
-    ], check=True)
+# Make "core" importable regardless of where this script is run from
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def youtube_to_mp4(url, out):
-    subprocess.run([
-        "yt-dlp",
-        "-f", "bv*+ba/best",
-        "--merge-output-format", "mp4",
-        "-o", f"{out}/%(title)s.%(ext)s",
-        url
-    ], check=True)
+from core.youtube import download_mp3, download_mp4
 
-parser = argparse.ArgumentParser()
-parser.add_argument("mode", choices=["yt"])
-parser.add_argument("--mp3", action="store_true")
-parser.add_argument("--mp4", action="store_true")
-parser.add_argument("url")
-parser.add_argument("--out", default="downloads")
 
-args = parser.parse_args()
-os.makedirs(args.out, exist_ok=True)
+def main():
+    parser = argparse.ArgumentParser(description="YouTube → MP3/MP4 downloader")
+    parser.add_argument("mode", choices=["yt"])
+    parser.add_argument("url", help="YouTube URL to download")
+    parser.add_argument("--mp3", action="store_true", help="Download as MP3")
+    parser.add_argument("--mp4", action="store_true", help="Download as MP4")
+    parser.add_argument("--out", default="downloads", help="Output folder (default: downloads)")
 
-if args.mp3:
-    youtube_to_mp3(args.url, args.out)
-elif args.mp4:
-    youtube_to_mp4(args.url, args.out)
-else:
-    print("Choose --mp3 or --mp4")
+    args = parser.parse_args()
 
-# command list
-# python cli.py to run
-# -h = help
-# --mp3 , --mp4 = file type
-# --out {location} (file path or folder name)
-# yt needed it a place selection 
-# command example
-# python cli.py yt --mp3 --out downloads https://youtu.be/ddQ7YR0qQSo?si=QKMYohk3Mv9NSlax
-# meaning it download mp3 to folder downloads in this place
-# python cli.py yt --mp4 --out C:\Users\tetee\Documents\GitHub\Converter https://youtu.be/ddQ7YR0qQSo?si=QKMYohk3Mv9NSlax
-# download mp4 file to this github folder 
+    if not args.mp3 and not args.mp4:
+        parser.error("Choose --mp3 or --mp4")
+
+    os.makedirs(args.out, exist_ok=True)
+
+    def print_progress(data):
+        pct = int(data["percent"] * 100)
+        print(f"\r  {pct}% | {data['size']} | {data['speed']} | ETA {data['eta']}", end="", flush=True)
+
+    try:
+        if args.mp3:
+            print(f"Downloading MP3 to: {args.out}")
+            download_mp3(args.url, args.out, progress_callback=print_progress)
+        else:
+            print(f"Downloading MP4 to: {args.out}")
+            download_mp4(args.url, args.out, progress_callback=print_progress)
+        print("\nDone!")
+    except RuntimeError as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+# Usage examples:
+#   python cli/cli.py yt "https://youtu.be/VIDEO_ID" --mp3
+#   python cli/cli.py yt "https://youtu.be/VIDEO_ID" --mp4 --out C:\Users\you\Music
+if __name__ == "__main__":
+    main()

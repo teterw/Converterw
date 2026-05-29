@@ -1,3 +1,12 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+
+# Downloads
+downloads/
+
+# Build artifacts
+dist/
+build/
+*.spec

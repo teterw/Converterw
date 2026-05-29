@@ -1,3 +1,8 @@
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import threading
@@ -13,7 +18,6 @@ def run_app():
     app.geometry("520x480")
     app.resizable(False, False)
 
-    # ===== Helpers =====
     def browse_folder():
         path = filedialog.askdirectory()
         if path:
@@ -34,32 +38,36 @@ def run_app():
         info_label.pack_forget()
 
     def update_progress(data):
-        app.after(0, lambda: (
-            progress_bar.set(data["percent"]),
+        def _update():
+            progress_bar.set(data["percent"])
             info_label.configure(
                 text=f"{int(data['percent']*100)}% | {data['size']} | {data['speed']} | ETA {data['eta']}"
             )
-        ))
+        app.after(0, _update)
 
     def start_download(func, label):
+        url = url_entry.get().strip()
+        out = out_entry.get().strip()
+
+        if not url:
+            messagebox.showwarning("Missing URL", "Please enter a YouTube URL.")
+            return
+
         def task():
             try:
-                set_buttons("disabled")
-                status.configure(text=label)
+                app.after(0, lambda: set_buttons("disabled"))
+                app.after(0, lambda: status.configure(text=label))
                 app.after(0, show_progress)
 
-                func(
-                    url_entry.get(),
-                    out_entry.get(),
-                    progress_callback=update_progress
-                )
+                func(url, out, progress_callback=update_progress)
 
-                status.configure(text="Download finished")
+                app.after(0, lambda: status.configure(text="Done! File saved."))
             except Exception as e:
-                messagebox.showerror("Error", str(e))
-                status.configure(text="")
+                # capture e now so the lambda doesn't close over a changed variable
+                app.after(0, lambda err=str(e): messagebox.showerror("Error", err))
+                app.after(0, lambda: status.configure(text=""))
             finally:
-                set_buttons("normal")
+                app.after(0, lambda: set_buttons("normal"))
                 app.after(0, hide_progress)
 
         threading.Thread(target=task, daemon=True).start()
@@ -80,7 +88,7 @@ def run_app():
         app,
         text="Download MP3",
         width=200,
-        command=lambda: start_download(download_mp3, "Downloading MP3...")
+        command=lambda: start_download(download_mp3, "Downloading MP3..."),
     )
     mp3_btn.pack(pady=(10, 5))
 
@@ -88,7 +96,7 @@ def run_app():
         app,
         text="Download MP4",
         width=200,
-        command=lambda: start_download(download_mp4, "Downloading MP4...")
+        command=lambda: start_download(download_mp4, "Downloading MP4..."),
     )
     mp4_btn.pack(pady=5)
 

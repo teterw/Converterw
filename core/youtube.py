@@ -38,20 +38,13 @@ def _download(url, out_dir, mode, progress_callback):
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # Decide output path
     if is_playlist_only(url):
         output_template = f"{out_dir}/%(playlist_title)s/%(title)s.%(ext)s"
     else:
         output_template = f"{out_dir}/%(title)s.%(ext)s"
 
-    cmd = [
-        "yt-dlp",
-        "--newline",
-        "-o", output_template,
-        url
-    ]
+    cmd = ["yt-dlp", "--newline", "-o", output_template, url]
 
-    # Force single-video behavior
     if is_video_in_playlist(url) and not is_playlist_only(url):
         cmd.append("--no-playlist")
 
@@ -64,27 +57,37 @@ def _download(url, out_dir, mode, progress_callback):
     if sys.platform == "win32":
         creationflags = subprocess.CREATE_NO_WINDOW
 
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
-        creationflags=creationflags
-    )
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            creationflags=creationflags,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "yt-dlp not found.\n"
+            "Install it with:  pip install yt-dlp\n"
+            "Also ensure ffmpeg is installed and available in PATH."
+        )
 
+    output_lines = []
     for line in process.stdout:
+        output_lines.append(line.rstrip())
         match = PROGRESS_REGEX.search(line)
         if match and progress_callback:
             progress_callback({
                 "percent": float(match.group(1)) / 100,
                 "size": f"{match.group(2)} {match.group(3)}",
                 "speed": f"{match.group(4)} {match.group(5)}/s",
-                "eta": match.group(6)
+                "eta": match.group(6),
             })
 
     process.wait()
 
     if process.returncode != 0:
-        raise RuntimeError("Download failed")
+        error_tail = "\n".join(line for line in output_lines[-5:] if line)
+        raise RuntimeError(f"Download failed:\n{error_tail}")
