@@ -8,19 +8,15 @@ Built with Python because I wanted a local tool instead of relying on online con
 - Download YouTube audio as MP3
 - Supports single videos and playlists
 - Simple GUI with progress bar
-- Portable `.exe` — no Python install needed
+- Fully portable `.exe` — nothing else to install, ffmpeg and yt-dlp are bundled inside
 
 ---
 
 ## Download
 
-Grab the latest `Converterw.exe` from the [Releases](https://github.com/teterw/Converterw/releases) page.
+Grab the latest `Converterw-win64.zip` from the [Releases](https://github.com/teterw/Converterw/releases) page, unzip it, and run `Converterw.exe`.
 
-**Requirement:** You also need `ffmpeg` installed on your machine.
-Install it in one command:
-```
-winget install ffmpeg
-```
+That's it — no Python, no ffmpeg, no yt-dlp install required. Everything the app needs ships inside the `.exe`.
 
 **Windows Defender warning:** The `.exe` may trigger a warning because it is unsigned.
 This is a common false positive for PyInstaller apps. Click **More info → Run anyway** to proceed.
@@ -33,82 +29,52 @@ This is a common false positive for PyInstaller apps. Click **More info → Run 
 ```
 pip install -r requirements.txt
 ```
-You also need `ffmpeg` (see above).
 
 **2. Run the app**
 ```
 python main.py
 ```
 
-**CLI usage**
-```
-python cli/cli.py yt "https://youtu.be/VIDEO_ID" --mp3
-python cli/cli.py yt "https://youtu.be/VIDEO_ID" --mp4 --out C:\Users\you\Music
-```
+When running from source, the app will use `ffmpeg` from your system `PATH` if it can't find a bundled copy in `vendor/ffmpeg/` (see below), so install ffmpeg separately if you're developing this way and don't already have it.
 
 ---
 
 ## Building the .exe
 
-**1. Install PyInstaller**
-```
-pip install pyinstaller
-```
-
-**2. Build**
-```
-pyinstaller --onefile --windowed --name Converterw --collect-data customtkinter main.py
-```
-
-Or just run the included script:
+Just run:
 ```
 build.bat
 ```
 
-The output will be at `dist\Converterw.exe`.
+This will:
+1. Install `pyinstaller` and the packages in `requirements.txt`
+2. Download a portable static `ffmpeg.exe` build into `vendor/ffmpeg/` (one-time, skipped if already present)
+3. Bundle the app, `yt-dlp`, and `ffmpeg` together into a single `dist\Converterw.exe`
+4. Zip it up as `release\Converterw-win64.zip`, ready to attach to a GitHub release
 
-**Flags explained:**
-- `--onefile` — bundles everything into a single `.exe`
-- `--windowed` — hides the console window behind the GUI
-- `--collect-data customtkinter` — includes CustomTkinter's theme files (required, it crashes without this)
+Because `yt-dlp` is imported directly as a Python library (instead of being called as a separate command-line tool) and `ffmpeg` is bundled into the `.exe` itself, the resulting build works on any Windows machine with nothing extra installed — this is what fixes the "works on my PC, not on others'" problem.
 
 ---
 
 ## Releasing to GitHub
 
-**1. Tag the version**
+Releases are built automatically by [`.github/workflows/build.yml`](.github/workflows/build.yml) — it runs on a real Windows GitHub Actions runner (there's no local Windows machine involved), so this works the same whether you're developing on Windows, macOS, or Linux.
+
+**1. Tag the version and push it**
 ```
 git tag v1.0.0
-git push origin main --tags
+git push origin v1.0.0
 ```
 
-**2. Create the release**
-- Go to your repo on GitHub → **Releases** → **Create a new release**
-- Select your tag
-- Attach `dist\Converterw.exe`
-- Publish
+That's it. The workflow builds `Converterw.exe`, zips it, and attaches `Converterw-win64.zip` to a new GitHub Release named after the tag.
+
+You can also trigger a build without releasing (e.g. to sanity-check a branch) from the **Actions** tab → **Build Windows release** → **Run workflow**; the zip shows up as a downloadable build artifact on that run.
 
 For future releases, bump the version number and repeat.
 
----
+### Building locally instead
 
-## Docker (CLI only)
-
-Docker works for the CLI downloader. The GUI cannot run inside Docker on Windows.
-
-**Build the image**
-```
-docker build -t converterw .
-```
-
-**Run it**
-```
-docker run --rm -v "C:\Users\you\Downloads:/downloads" converterw yt "https://youtu.be/VIDEO_ID" --mp3 --out /downloads
-docker run --rm -v "C:\Users\you\Downloads:/downloads" converterw yt "https://youtu.be/VIDEO_ID" --mp4 --out /downloads
-```
-
-`-v` maps a folder on your machine to `/downloads` inside the container — that's where the file saves.
-No Python, yt-dlp, or ffmpeg install needed on the host.
+If you're on Windows and want a local build without going through CI, `build.bat` still does the same thing `build.ps1` runs in CI — installs dependencies, downloads a portable `ffmpeg.exe` into `vendor/ffmpeg/`, builds `dist\Converterw.exe`, and zips it to `release\Converterw-win64.zip`.
 
 ---
 
@@ -118,4 +84,4 @@ No Python, yt-dlp, or ffmpeg install needed on the host.
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
 - [PyInstaller](https://pyinstaller.org)
-- [ffmpeg](https://ffmpeg.org)
+- [ffmpeg](https://ffmpeg.org) (static builds from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds))

@@ -9,4 +9,8 @@ downloads/
 # Build artifacts
 dist/
 build/
+release/
 *.spec
+
+# Downloaded during build.ps1, not committed (too large for git)
+vendor/
