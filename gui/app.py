@@ -236,6 +236,48 @@ class ConverterwApp(ctk.CTk):
         ctk.CTkEntry(tab, textvariable=self.playlist_items_var, width=160,
                      placeholder_text="e.g. 1-5,8").grid(row=row + 1, column=1, sticky="w", pady=6)
 
+        self._build_trim_section(tab, row + 2)
+
+    def _build_trim_section(self, tab, row):
+        """A checkbox that reveals start/end time boxes only once it is ticked."""
+        self.trim_enabled_var = ctk.BooleanVar()
+        self.trim_start_var = ctk.StringVar()
+        self.trim_end_var = ctk.StringVar()
+
+        ctk.CTkCheckBox(tab, text="Download only part of the video",
+                        variable=self.trim_enabled_var, command=self._toggle_trim).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=(10, 4)
+        )
+
+        self.trim_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        self.trim_frame.grid(row=row + 1, column=0, columnspan=3, sticky="w", pady=(0, 4))
+
+        ctk.CTkLabel(self.trim_frame, text="Start").pack(side="left")
+        ctk.CTkEntry(self.trim_frame, textvariable=self.trim_start_var, width=90,
+                     placeholder_text="0:30").pack(side="left", padx=(8, 20))
+        ctk.CTkLabel(self.trim_frame, text="End").pack(side="left")
+        ctk.CTkEntry(self.trim_frame, textvariable=self.trim_end_var, width=90,
+                     placeholder_text="1:45").pack(side="left", padx=(8, 16))
+        ctk.CTkLabel(self.trim_frame,
+                     text="mm:ss or hh:mm:ss - leave End empty to keep going to the end",
+                     text_color=("gray40", "gray60"), font=ctk.CTkFont(size=11)).pack(side="left")
+
+        self.trim_frame.grid_remove()
+
+    def _apply_trim_visibility(self):
+        if self.trim_enabled_var.get():
+            self.trim_frame.grid()
+        else:
+            self.trim_frame.grid_remove()
+
+    def _toggle_trim(self):
+        self._apply_trim_visibility()
+        # The tab just got taller or shorter, so its cached height is now wrong.
+        self.update()
+        name = self.tabs.get()
+        self._tab_heights[name] = self.tabs.tab(name).winfo_reqheight()
+        self._resize_tabs()
+
     def _build_advanced_tab(self, tab):
         tab.grid_columnconfigure(1, weight=1)
 
@@ -330,6 +372,10 @@ class ConverterwApp(ctk.CTk):
         self.skip_existing_var.set(s["skip_existing"])
         self.subtitle_languages_var.set(s["subtitle_languages"])
         self.playlist_items_var.set(s["playlist_items"])
+        self.trim_enabled_var.set(s["trim_enabled"])
+        self.trim_start_var.set(s["trim_start"])
+        self.trim_end_var.set(s["trim_end"])
+        self._apply_trim_visibility()
         self.cookies_var.set(s["cookies_browser"])
         self.fragments_var.set(str(s["concurrent_fragments"]))
         self.appearance_var.set(s["appearance"])
@@ -357,6 +403,9 @@ class ConverterwApp(ctk.CTk):
             "skip_existing": self.skip_existing_var.get(),
             "subtitle_languages": self.subtitle_languages_var.get(),
             "playlist_items": self.playlist_items_var.get(),
+            "trim_enabled": self.trim_enabled_var.get(),
+            "trim_start": self.trim_start_var.get(),
+            "trim_end": self.trim_end_var.get(),
             "cookies_browser": self.cookies_var.get(),
             "concurrent_fragments": fragments,
             "appearance": self.appearance_var.get(),

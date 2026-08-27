@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,6 +73,9 @@ class Options:
     playlist_items: str = ""
     playlist_subfolder: bool = True
     skip_existing: bool = False
+    trim_enabled: bool = False
+    trim_start: str = ""
+    trim_end: str = ""
     cookies_browser: str = "None"
     concurrent_fragments: int = 4
 
@@ -82,6 +86,24 @@ def _ffmpeg_location():
         if (candidate_dir / _FFMPEG_EXE).is_file():
             return str(candidate_dir)
     return None
+
+
+def _put_ffmpeg_on_path():
+    """Also expose the bundled ffmpeg through PATH.
+
+    Most of yt-dlp honours the ffmpeg_location option, but the downloader used
+    for partial downloads looks ffmpeg up on PATH only - without this, trimming
+    fails with "ffmpeg is not installed" even though it is right there.
+    """
+    location = _ffmpeg_location()
+    if not location:
+        return
+    path = os.environ.get("PATH", "")
+    if location not in path.split(os.pathsep):
+        os.environ["PATH"] = location + os.pathsep + path
+
+
+_put_ffmpeg_on_path()
 
 
 def has_ffmpeg() -> bool:
@@ -127,6 +149,39 @@ def format_duration(seconds):
     if not seconds:
         return "?"
     return _format_eta(seconds)
+
+
+_TIMECODE_PART = re.compile(r"^\d+(\.\d+)?$")
+
+
+def parse_timecode(text):
+    """'75', '1:15', '01:02:03' or '1:15.5' -> seconds. Blank input returns None."""
+    text = (text or "").strip()
+    if not text:
+        return None
+
+    parts = text.split(":")
+    if len(parts) > 3 or not all(_TIMECODE_PART.match(part.strip()) for part in parts):
+        raise ValueError(f'"{text}" is not a time. Use mm:ss, hh:mm:ss, or seconds.')
+
+    seconds = 0.0
+    for part in parts:
+        seconds = seconds * 60 + float(part)
+    return seconds
+
+
+def _trim_range(options: Options):
+    """(start, end) in seconds for the section to keep, or None for the lot."""
+    if not options.trim_enabled:
+        return None
+
+    start = parse_timecode(options.trim_start)
+    end = parse_timecode(options.trim_end)
+    if start is None and end is None:
+        return None
+    if start is not None and end is not None and end <= start:
+        raise ValueError("The end time has to be later than the start time.")
+    return (start or 0.0, end if end is not None else float("inf"))
 
 
 def _audio_quality(label):
@@ -241,6 +296,13 @@ def build_options(url, out_dir, options: Options, progress_hooks=(), logger=None
 
     if options.skip_existing:
         ydl_opts["download_archive"] = os.path.join(out_dir, ".converterw-archive.txt")
+
+    trim = _trim_range(options)
+    if trim:
+        # force_keyframes_at_cuts re-encodes around the cut points; without it
+        # the clip starts at the previous keyframe, which can be seconds early.
+        ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func(None, [trim])
+        ydl_opts["force_keyframes_at_cuts"] = True
 
     if options.cookies_browser and options.cookies_browser != "None":
         ydl_opts["cookiesfrombrowser"] = (options.cookies_browser,)
@@ -391,6 +453,13 @@ class Downloader:
             raise ValueError("No output folder selected")
 
         os.makedirs(out_dir, exist_ok=True)
+
+        trim = _trim_range(options)
+        if trim and not has_ffmpeg():
+            raise RuntimeError(
+                "ffmpeg is required to trim a video but was not found.\n"
+                "Use the bundled .exe build, or install ffmpeg and put it on your PATH."
+            )
 
         if options.mode == "audio" and not has_ffmpeg():
             raise RuntimeError(

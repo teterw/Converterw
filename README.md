@@ -8,6 +8,7 @@ Built with Python because I wanted a local tool instead of relying on online con
 - Extract audio as MP3, M4A, Opus, FLAC or WAV, with a bitrate picker
 - Embed cover art, title/artist tags and chapters automatically
 - Embed subtitles, and skip sponsor segments via SponsorBlock
+- Trim: download only part of a video by start/end time (collapsed until you turn it on)
 - Playlists: whole list or a range like `1-5,8`, saved into their own folder
 - Live progress with speed and ETA, a cancel button, and a log panel
 - Remembers your settings between runs
