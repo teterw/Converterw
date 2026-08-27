@@ -2,7 +2,7 @@ import os
 import sys
 from pathlib import Path
 
-from core.version import APP_NAME
+from converterw.version import APP_NAME
 
 
 def app_data_dir() -> Path:

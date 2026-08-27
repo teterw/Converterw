@@ -3,8 +3,8 @@
 import json
 from dataclasses import asdict, fields
 
-from core.paths import app_data_dir
-from core.youtube import DEFAULT_DOWNLOAD_DIR, Options
+from converterw.paths import app_data_dir
+from converterw.youtube import DEFAULT_DOWNLOAD_DIR, Options
 
 SETTINGS_FILE = app_data_dir() / "settings.json"
 

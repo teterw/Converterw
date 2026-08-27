@@ -25,7 +25,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from core.paths import app_data_dir
+from converterw.paths import app_data_dir
 
 PYPI_PROJECT_URL = "https://pypi.org/pypi/yt-dlp/json"
 _USER_AGENT = "Converterw (+https://github.com/teterw/Converterw)"
@@ -239,5 +239,11 @@ def restart_app():
     if getattr(sys, "frozen", False):
         command = [sys.executable]
     else:
-        command = [sys.executable, str(Path(__file__).resolve().parent.parent / "main.py")]
+        # Re-run whatever launched us - main.py from a checkout, or the installed
+        # console script - and fall back to the package's own entry point.
+        launcher = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
+        if launcher and launcher.is_file():
+            command = [sys.executable, str(launcher)]
+        else:
+            command = [sys.executable, "-m", "converterw"]
     subprocess.Popen(command, close_fds=True, cwd=os.getcwd())

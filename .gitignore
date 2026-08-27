@@ -14,3 +14,7 @@ release/
 
 # Downloaded during build.ps1, not committed (too large for git)
 vendor/
+
+# Packaging artifacts
+*.egg-info/
+.venv/

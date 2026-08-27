@@ -7,9 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import customtkinter as ctk  # noqa: E402
 from tkinter import filedialog, messagebox  # noqa: E402
 
-from core import config, engine  # noqa: E402
-from core.version import APP_NAME, __version__  # noqa: E402
-from core.youtube import (  # noqa: E402
+from converterw import config, engine  # noqa: E402
+from converterw.version import APP_NAME, __version__  # noqa: E402
+from converterw.youtube import (  # noqa: E402
     AUDIO_BITRATES,
     AUDIO_FORMATS,
     COOKIE_BROWSERS,
@@ -456,7 +456,7 @@ class ConverterwApp(ctk.CTk):
         self._open_path(self.out_entry.get().strip())
 
     def _open_data_folder(self):
-        from core.paths import app_data_dir
+        from converterw.paths import app_data_dir
 
         self._open_path(str(app_data_dir()))
 

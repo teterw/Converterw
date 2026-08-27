@@ -4,8 +4,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from core import engine
-from core.paths import bundled_dir
+from converterw import engine
+from converterw.paths import bundled_dir
 
 # Must happen before yt_dlp is imported so a downloaded engine can take over
 # from the (possibly stale) bundled copy.

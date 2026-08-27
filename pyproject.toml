@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "converterw"
+description = "Download YouTube videos and audio, from the terminal or a small GUI."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "teterw" }]
+keywords = ["youtube", "downloader", "yt-dlp", "mp3", "mp4"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+]
+dynamic = ["version"]
+
+# customtkinter is deliberately not required: the CLI runs fine on a headless
+# Linux box, and only the GUI needs it.
+dependencies = [
+    "yt-dlp>=2026.8.19",
+    "mutagen>=1.47.0",
+]
+
+[project.optional-dependencies]
+gui = ["customtkinter>=6.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/teterw/Converterw"
+Issues = "https://github.com/teterw/Converterw/issues"
+
+[project.scripts]
+converterw = "converterw.cli:entry_point"
+
+[project.gui-scripts]
+converterw-gui = "converterw.gui.app:run_app"
+
+[tool.setuptools]
+packages = ["converterw", "converterw.gui"]
+
+[tool.setuptools.dynamic]
+version = { attr = "converterw.version.__version__" }
