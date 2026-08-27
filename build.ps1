@@ -2,8 +2,13 @@ $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
 Write-Host "Installing dependencies..."
-pip install -r requirements.txt pyinstaller
+# --upgrade matters: YouTube breaks older yt-dlp releases with 403 errors, so a
+# build must always bundle the newest yt-dlp available at build time.
+pip install --upgrade -r requirements.txt pyinstaller
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+
+$ytdlpVersion = (pip show yt-dlp | Select-String '^Version:').ToString().Split(' ')[1]
+Write-Host "Bundling yt-dlp $ytdlpVersion"
 
 $ffmpegDir = Join-Path $PSScriptRoot "vendor\ffmpeg"
 $ffmpegExe = Join-Path $ffmpegDir "ffmpeg.exe"
@@ -35,6 +40,7 @@ Write-Host "Building Converterw.exe..."
 pyinstaller --onefile --windowed --name Converterw `
     --collect-data customtkinter `
     --collect-all yt_dlp `
+    --collect-all mutagen `
     --add-binary "$ffmpegExe;." `
     main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
@@ -52,3 +58,4 @@ Write-Host "  Zip: release\Converterw-win64.zip  (upload this to GitHub Releases
 Write-Host ""
 Write-Host "The exe is fully self-contained - ffmpeg and yt-dlp are bundled inside it."
 Write-Host "Nothing else needs to be installed on the machine that runs it."
+Write-Host "yt-dlp $ytdlpVersion is bundled; the app keeps it updated by itself."
