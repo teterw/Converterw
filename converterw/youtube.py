@@ -69,7 +69,11 @@ class Options:
     embed_subtitles: bool = False
     subtitle_languages: str = "en"
     remove_sponsors: bool = False
-    download_playlist: bool = True
+    # Off by default: a copied YouTube link usually carries a mix in "&list=",
+    # and grabbing that whole mix is never what was wanted.
+    download_playlist: bool = False
+    # Hard override: never pull in a list, not even from a playlist link.
+    no_playlist: bool = False
     playlist_items: str = ""
     playlist_subfolder: bool = True
     skip_existing: bool = False
@@ -246,11 +250,23 @@ def _postprocessors(options: Options):
     return pps
 
 
+def wants_playlist(url, options: Options) -> bool:
+    """Whether this URL should pull in a whole list.
+
+    A bare playlist link always means the playlist. A video link that merely
+    carries "&list=" means just that one video - copying a link out of YouTube
+    usually drags a mix along with it, and downloading the entire radio mix is
+    never what was meant. Setting no_playlist overrules both cases.
+    """
+    if options.no_playlist:
+        return False
+    if is_playlist_only(url):
+        return True
+    return options.download_playlist and is_video_in_playlist(url)
+
+
 def _output_template(url, out_dir, options: Options):
-    treat_as_playlist = options.download_playlist and (
-        is_playlist_only(url) or is_video_in_playlist(url)
-    )
-    if treat_as_playlist and options.playlist_subfolder:
+    if wants_playlist(url, options) and options.playlist_subfolder:
         return os.path.join(out_dir, "%(playlist_title)s", "%(playlist_index)s - %(title)s.%(ext)s")
     return os.path.join(out_dir, "%(title)s.%(ext)s")
 
@@ -262,7 +278,7 @@ def build_options(url, out_dir, options: Options, progress_hooks=(), logger=None
         # sitting next to the downloaded files.
         "outtmpl": {"default": _output_template(url, out_dir, options), "pl_thumbnail": ""},
         "format": _format_selector(options),
-        "noplaylist": not options.download_playlist,
+        "noplaylist": not wants_playlist(url, options),
         "progress_hooks": list(progress_hooks),
         "postprocessors": _postprocessors(options),
         "quiet": True,
@@ -440,6 +456,31 @@ class Downloader:
                 "status": "processing",
             })
 
+    def _check_trim_fits(self, url, trim):
+        """Reject a trim window that starts past the end of the video.
+
+        ffmpeg is asked for a section that does not exist and dies with a bare
+        "exited with code 4294967274", which says nothing about the real cause -
+        an old trim range left switched on from an earlier download.
+        """
+        try:
+            info = probe(url)
+        except Exception:
+            return  # Can't check: let the download report the real problem.
+
+        duration = info.get("duration")
+        if info.get("is_playlist") or not duration:
+            return
+
+        start = trim[0]
+        if start >= duration:
+            raise ValueError(
+                f"This video is only {format_duration(duration)} long, but the "
+                f"selected part starts at {format_duration(start)}.\n\n"
+                'Change the start and end times, or turn off "Download only part '
+                'of the video".'
+            )
+
     def run(self, url, out_dir, options: Options):
         """Download `url` into `out_dir`.
 
@@ -455,6 +496,8 @@ class Downloader:
         os.makedirs(out_dir, exist_ok=True)
 
         trim = _trim_range(options)
+        if trim:
+            self._check_trim_fits(url, trim)
         if trim and not has_ffmpeg():
             raise RuntimeError(
                 "ffmpeg is required to trim a video but was not found.\n"

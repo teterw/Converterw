@@ -8,6 +8,7 @@ import customtkinter as ctk  # noqa: E402
 from tkinter import filedialog, messagebox  # noqa: E402
 
 from converterw import config, engine  # noqa: E402
+from converterw.paths import log_error  # noqa: E402
 from converterw.version import APP_NAME, __version__  # noqa: E402
 from converterw.youtube import (  # noqa: E402
     AUDIO_BITRATES,
@@ -214,7 +215,7 @@ class ConverterwApp(ctk.CTk):
             ("Embed title, artist and chapters", self.embed_metadata_var),
             ("Embed subtitles (video only)", self.embed_subtitles_var),
             ("Remove sponsor segments (SponsorBlock)", self.remove_sponsors_var),
-            ("Download whole playlist when the URL has one", self.download_playlist_var),
+            ("Download the whole playlist when a video link carries one", self.download_playlist_var),
             ("Put playlists in their own folder", self.playlist_subfolder_var),
             ("Skip videos already downloaded to this folder", self.skip_existing_var),
         ]
@@ -264,11 +265,23 @@ class ConverterwApp(ctk.CTk):
 
         self.trim_frame.grid_remove()
 
+        for variable in (self.trim_start_var, self.trim_end_var):
+            variable.trace_add("write", self._refresh_trim_hint)
+
     def _apply_trim_visibility(self):
         if self.trim_enabled_var.get():
             self.trim_frame.grid()
         else:
             self.trim_frame.grid_remove()
+        self._refresh_trim_hint()
+
+    def _refresh_trim_hint(self, *_):
+        if not self.trim_enabled_var.get():
+            self.trim_hint.configure(text="")
+            return
+        start = self.trim_start_var.get().strip() or "start"
+        end = self.trim_end_var.get().strip() or "end"
+        self.trim_hint.configure(text=f"Trimming to {start} - {end}")
 
     def _toggle_trim(self):
         self._apply_trim_visibility()
@@ -340,8 +353,14 @@ class ConverterwApp(ctk.CTk):
         self.progress_bar = ctk.CTkProgressBar(self)
         self.progress_bar.set(0)
 
+        # Trimming is set on the Options tab but applies to every download, so
+        # it is echoed here where it cannot be forgotten about.
+        self.trim_hint = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=12),
+                                      text_color=("#8a5a00", "#e0a33a"))
+        self.trim_hint.pack(pady=(8, 0))
+
         self.status_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=12))
-        self.status_label.pack(pady=(8, 0))
+        self.status_label.pack()
 
     def _build_log(self):
         self.log_toggle = ctk.CTkButton(
@@ -570,6 +589,7 @@ class ConverterwApp(ctk.CTk):
                 self._log("--- cancelled")
             except Exception as error:
                 message = str(error)
+                log_error(message, context=f"{mode} download: {url}\noptions: {options}")
                 self._log(f"--- failed: {message.splitlines()[0] if message else 'unknown error'}")
                 self.after(0, lambda: messagebox.showerror("Download failed", message))
                 self.after(0, lambda: self.status_label.configure(text="Failed."))

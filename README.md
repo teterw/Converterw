@@ -9,7 +9,8 @@ Built with Python because I wanted a local tool instead of relying on online con
 - Embed cover art, title/artist tags and chapters automatically
 - Embed subtitles, and skip sponsor segments via SponsorBlock
 - Trim: download only part of a video by start/end time
-- Playlists: whole list or a range like `1-5,8`, saved into their own folder
+- Playlists: a playlist link downloads the whole list (or a range like `1-5,8`) into its own
+  folder, while a video link that merely carries `&list=` downloads just that video
 - Live progress with speed and ETA, and a cancel button
 - **Keeps its own downloader engine up to date, so it doesn't break every few weeks**
 - Windows: a portable `.exe` with ffmpeg and yt-dlp bundled inside
@@ -104,7 +105,8 @@ converterw https://youtu.be/VIDEO --info
 | `--subs LANGS` | Embed subtitles, e.g. `--subs en,es` |
 | `--sponsorblock` | Cut sponsor segments out |
 | `--no-thumbnail`, `--no-metadata` | Skip embedding cover art / tags |
-| `--no-playlist` | Take only the one video, even if the URL has a list |
+| `--playlist` | Also take the list a video link carries (a mix, usually) |
+| `--no-playlist` | Download one video only, even from a playlist link |
 | `--items RANGE` | Which playlist entries to take, e.g. `1-5,8` |
 | `--flat` | Don't put the playlist in its own folder |
 | `--skip-existing` | Skip anything already downloaded to that folder |
@@ -150,6 +152,7 @@ If a download still fails with 403, run `converterw --update-engine` (or use
 | --- | --- |
 | Settings | `%LOCALAPPDATA%\Converterw\settings.json` — Linux: `~/.local/share/Converterw/settings.json` |
 | Updated yt-dlp engine | the `engine/` folder next to it |
+| Failed downloads | `errors.log` next to it — paste this when reporting a problem |
 
 **Advanced → Open data folder** takes you straight there in the GUI. Deleting that
 folder resets the app to a clean state.

@@ -11,6 +11,7 @@ import os
 import sys
 
 from converterw import config, engine
+from converterw.paths import log_error
 from converterw.version import APP_NAME, __version__
 from converterw.youtube import (
     AUDIO_FORMATS,
@@ -93,8 +94,10 @@ def build_parser():
                         help="use cookies from a browser for age-restricted videos")
 
     playlist = parser.add_argument_group("playlists")
+    playlist.add_argument("--playlist", action="store_true",
+                          help="also take the list a video link carries (a mix, usually)")
     playlist.add_argument("--no-playlist", action="store_true",
-                          help="download just the one video, even if the URL has a list")
+                          help="download one video only, even from a playlist link")
     playlist.add_argument("--items", metavar="RANGE", default="",
                           help="which entries to take, e.g. 1-5,8")
     playlist.add_argument("--flat", action="store_true",
@@ -133,7 +136,8 @@ def options_from_args(args) -> Options:
     options.subtitle_languages = args.subs or "en"
     options.remove_sponsors = args.sponsorblock
 
-    options.download_playlist = not args.no_playlist
+    options.download_playlist = args.playlist
+    options.no_playlist = args.no_playlist
     options.playlist_items = args.items
     options.playlist_subfolder = not args.flat
     options.skip_existing = args.skip_existing
@@ -274,6 +278,7 @@ def main(argv=None):
         return 130
     except (ValueError, RuntimeError) as error:
         progress.done()
+        log_error(str(error), context=f"{'audio' if args.audio else 'video'} download: {args.url}")
         print(f"error: {error}", file=sys.stderr)
         return 1
 

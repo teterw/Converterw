@@ -18,6 +18,28 @@ def app_data_dir() -> Path:
     return path
 
 
+def error_log() -> Path:
+    return app_data_dir() / "errors.log"
+
+
+def log_error(message, context=""):
+    """Append a failure to the error log so it can be reported after the fact.
+
+    The GUI shows an error in a dialog that is gone as soon as it is dismissed,
+    which leaves nothing to go on when someone says "it failed".
+    """
+    from datetime import datetime
+
+    try:
+        with open(error_log(), "a", encoding="utf-8") as handle:
+            handle.write(f"\n--- {datetime.now():%Y-%m-%d %H:%M:%S}\n")
+            if context:
+                handle.write(f"{context}\n")
+            handle.write(f"{message}\n")
+    except OSError:
+        pass  # Never let logging a failure cause another one.
+
+
 def bundled_dir() -> Path:
     """Where PyInstaller extracts bundled files at runtime, or the source tree otherwise."""
     if getattr(sys, "frozen", False):
