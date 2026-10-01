@@ -38,6 +38,8 @@ if (-not (Test-Path $ffmpegExe)) {
 
 Write-Host "Building Converterw.exe..."
 pyinstaller --onefile --windowed --name Converterw `
+    --icon "converterw\gui\icon.ico" `
+    --add-data "converterw\gui\icon.ico;converterw\gui" `
     --collect-data customtkinter `
     --collect-all yt_dlp `
     --collect-all mutagen `

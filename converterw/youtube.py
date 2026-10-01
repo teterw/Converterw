@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from converterw import engine
@@ -44,7 +44,17 @@ _CLIENT_FALLBACKS = [
     ["ios", "android"],
 ]
 
+# Without ffmpeg only a format that already holds both video and sound will
+# do. The default clients no longer offer one; the android client still has
+# YouTube's 360p "format 18", so it is asked as well from the start.
+_NO_FFMPEG_CLIENT_FALLBACKS = [["default", "android"]] + _CLIENT_FALLBACKS[1:]
+
 SPONSORBLOCK_CATEGORIES = ["sponsor", "selfpromo", "interaction", "intro", "outro", "preview"]
+
+NO_FFMPEG_NOTE = (
+    "ffmpeg was not found, so this downloads a ready-made single file instead "
+    "(usually 360p at most), without cover art or tags."
+)
 
 
 class Cancelled(yt_dlp.utils.DownloadCancelled):
@@ -130,6 +140,27 @@ def is_video_in_playlist(url: str) -> bool:
     return is_video_url(url) and "list=" in url
 
 
+_LINK_START = re.compile(r"^(https?://|(www\.|m\.|music\.)?(youtube\.com|youtu\.be)/)", re.IGNORECASE)
+
+
+def split_links(text):
+    """Every link in a block of pasted text, in order and without repeats.
+
+    Links may be separated by new lines, spaces or commas, and words around
+    them ("check this out: https://...") are dropped. Text with no recognisable
+    link at all is passed through whole, so yt-dlp can still say what is wrong
+    with it.
+    """
+    links = []
+    for token in re.split(r"[\s,]+", text or ""):
+        token = token.lstrip("(<[\"'").rstrip(".;)]>'\"")
+        if _LINK_START.match(token) and token not in links:
+            links.append(token)
+    if not links and (text or "").strip():
+        return [text.strip()]
+    return links
+
+
 def _format_bytes(n):
     if not n:
         return "0B"
@@ -194,7 +225,7 @@ def _audio_quality(label):
     return digits or "0"  # "0" means best available to FFmpegExtractAudio
 
 
-def _format_selector(options: Options) -> str:
+def _format_selector(options: Options, ffmpeg=True) -> str:
     """Build a yt-dlp format string, always with a fallback chain so an exact
     match never turns into "requested format not available"."""
     if options.mode == "audio":
@@ -202,6 +233,12 @@ def _format_selector(options: Options) -> str:
 
     height = _QUALITY_HEIGHTS.get(options.quality)
     limit = f"[height<={height}]" if height else ""
+
+    if not ffmpeg:
+        # Separate video and audio streams can't be merged, and yt-dlp would
+        # leave them lying side by side - a silent video next to its sound.
+        # Only formats that already hold both will do.
+        return f"b{limit}[ext={options.container}]/b{limit}/b"
 
     chain = []
     if options.container == "mp4":
@@ -216,9 +253,14 @@ def _format_selector(options: Options) -> str:
     return "/".join(chain)
 
 
-def _postprocessors(options: Options):
+def _postprocessors(options: Options, ffmpeg=True):
     """Mirror the order the yt-dlp command line uses, which matters: chapters
     are rewritten before the container is built, and tags go on last."""
+    if not ffmpeg:
+        # Every step below runs ffmpeg. Audio, trimming and SponsorBlock are
+        # refused up front without it; embedding is simply left out.
+        return []
+
     pps = []
 
     if options.remove_sponsors:
@@ -271,16 +313,25 @@ def _output_template(url, out_dir, options: Options):
     return os.path.join(out_dir, "%(title)s.%(ext)s")
 
 
-def build_options(url, out_dir, options: Options, progress_hooks=(), logger=None):
-    """Translate our Options into the dict yt-dlp expects."""
+def build_options(url, out_dir, options: Options, progress_hooks=(), logger=None,
+                  post_hooks=(), ffmpeg=None):
+    """Translate our Options into the dict yt-dlp expects.
+
+    `post_hooks` are called with the path of each finished file. `ffmpeg`
+    says whether ffmpeg can be used; by default it is looked for.
+    """
+    if ffmpeg is None:
+        ffmpeg = has_ffmpeg()
+
     ydl_opts = {
         # "pl_thumbnail" is disabled so a playlist's own cover art is not left
         # sitting next to the downloaded files.
         "outtmpl": {"default": _output_template(url, out_dir, options), "pl_thumbnail": ""},
-        "format": _format_selector(options),
+        "format": _format_selector(options, ffmpeg),
         "noplaylist": not wants_playlist(url, options),
         "progress_hooks": list(progress_hooks),
-        "postprocessors": _postprocessors(options),
+        "post_hooks": list(post_hooks),
+        "postprocessors": _postprocessors(options, ffmpeg),
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
@@ -295,10 +346,13 @@ def build_options(url, out_dir, options: Options, progress_hooks=(), logger=None
     if logger is not None:
         ydl_opts["logger"] = logger
 
-    if options.mode == "video":
+    if options.mode == "video" and ffmpeg:
         ydl_opts["merge_output_format"] = options.container
 
-    if options.embed_thumbnail:
+    # Without ffmpeg the thumbnail could only be left beside the video as a
+    # stray .webp, so it is not fetched at all. Subtitles still are: as .vtt
+    # files next to the video, which players pick up by name.
+    if options.embed_thumbnail and ffmpeg:
         ydl_opts["writethumbnail"] = True
 
     if options.embed_subtitles and options.mode == "video":
@@ -365,6 +419,22 @@ def probe(url, timeout=30):
     }
 
 
+def brief_error(message):
+    """One line saying what went wrong, for lists of failures.
+
+    Download errors open with a generic "Download failed:" and put yt-dlp's
+    own "ERROR: ..." line further down, so that line is preferred.
+    """
+    lines = [line.strip() for line in str(message).splitlines() if line.strip()]
+    for line in lines:
+        if line.startswith("ERROR:"):
+            return line
+    return lines[0] if lines else "Unknown error"
+
+
+_NO_FORMAT = "Requested format is not available"
+
+
 def _is_forbidden(error) -> bool:
     text = str(error).lower()
     return "403" in text or "forbidden" in text
@@ -401,8 +471,44 @@ class _CollectingLogger:
         self._emit(message)
 
 
+@dataclass
+class BatchResult:
+    """How a run of several links went."""
+
+    done: list = field(default_factory=list)  # (url, result from Downloader.run)
+    failed: list = field(default_factory=list)  # (url, error message)
+    cancelled: bool = False
+
+    @property
+    def files(self):
+        return [path for _url, result in self.done for path in result["files"]]
+
+    @property
+    def completed(self):
+        return sum(result["completed"] for _url, result in self.done)
+
+    @property
+    def skipped(self):
+        return sum(len(result["errors"]) for _url, result in self.done)
+
+    def summary(self, total):
+        """e.g. "Done - 2 of 3 links, 5 files saved. 1 link failed." for `total` links."""
+        files = _plural(self.completed, "file")
+        skipped = f", {self.skipped} skipped" if self.skipped else ""
+        if total == 1:
+            return f"Done - {files} saved{skipped}."
+        links = (_plural(total, "link") if not self.failed
+                 else f"{len(self.done)} of {_plural(total, 'link')}")
+        failed = f" {_plural(len(self.failed), 'link')} failed." if self.failed else ""
+        return f"Done - {links}, {files} saved{skipped}.{failed}"
+
+
+def _plural(count, noun):
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
 class Downloader:
-    """A single download job that can report progress and be cancelled."""
+    """A download job that can report progress and be cancelled."""
 
     def __init__(self, progress_callback=None, log_callback=None):
         self.progress_callback = progress_callback
@@ -481,12 +587,35 @@ class Downloader:
                 'of the video".'
             )
 
+    def run_all(self, urls, out_dir, options: Options, on_start=None):
+        """Download several links one after another.
+
+        A link that fails is noted and the rest still go ahead; cancelling
+        stops the whole batch. `on_start(index, url)` is called before each.
+        """
+        batch = BatchResult()
+        for index, url in enumerate(urls):
+            if self._cancelled:
+                batch.cancelled = True
+                break
+            if on_start:
+                on_start(index, url)
+            try:
+                batch.done.append((url, self.run(url, out_dir, options)))
+            except Cancelled:
+                batch.cancelled = True
+                break
+            except Exception as error:
+                batch.failed.append((url, str(error) or type(error).__name__))
+        return batch
+
     def run(self, url, out_dir, options: Options):
         """Download `url` into `out_dir`.
 
-        Returns {"completed": int, "errors": [str]} - a playlist that skipped a
-        few unavailable videos still counts as done. Raises RuntimeError if
-        nothing downloaded, or Cancelled if the user stopped it.
+        Returns {"completed": int, "errors": [str], "files": [path]} - a
+        playlist that skipped a few unavailable videos still counts as done.
+        Raises RuntimeError if nothing downloaded, or Cancelled if the user
+        stopped it.
         """
         if not url:
             raise ValueError("URL is empty")
@@ -510,20 +639,33 @@ class Downloader:
                 "Use the bundled .exe build, or install ffmpeg and put it on your PATH."
             )
 
+        ffmpeg = has_ffmpeg()
+        if not ffmpeg and options.remove_sponsors:
+            raise RuntimeError(
+                "ffmpeg is required to cut out sponsor segments but was not found.\n"
+                "Use the bundled .exe build, or install ffmpeg and put it on your PATH."
+            )
+        if not ffmpeg:
+            self._log(NO_FFMPEG_NOTE)
+
         last_errors = []
         saw_forbidden = False
-        for clients in _CLIENT_FALLBACKS:
+        fallbacks = _CLIENT_FALLBACKS if ffmpeg else _NO_FFMPEG_CLIENT_FALLBACKS
+        for attempt, clients in enumerate(fallbacks):
             if self._cancelled:
                 raise Cancelled()
 
             self._finished_ids.clear()
+            files = []
             logger = _CollectingLogger(self.log_callback)
             ydl_opts = build_options(
-                url, out_dir, options, progress_hooks=[self._hook], logger=logger
+                url, out_dir, options, progress_hooks=[self._hook], logger=logger,
+                post_hooks=[files.append], ffmpeg=ffmpeg,
             )
             if clients:
                 ydl_opts["extractor_args"] = {"youtube": {"player_client": clients}}
-                self._log(f"Retrying with player client: {', '.join(clients)}")
+                if attempt:
+                    self._log(f"Retrying with player client: {', '.join(clients)}")
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -537,7 +679,7 @@ class Downloader:
                 logger.errors.append(str(error))
 
             if retcode == 0 and not logger.errors:
-                return {"completed": len(self._finished_ids), "errors": []}
+                return {"completed": len(self._finished_ids), "errors": [], "files": files}
 
             last_errors = logger.errors
 
@@ -546,10 +688,18 @@ class Downloader:
                 return {
                     "completed": len(self._finished_ids),
                     "errors": list(logger.errors),
+                    "files": files,
                 }
 
             forbidden = any(_is_forbidden(message) for message in logger.errors)
             saw_forbidden = saw_forbidden or forbidden
+
+            if not ffmpeg and any(_NO_FORMAT in message for message in logger.errors):
+                raise RuntimeError(
+                    "This video only comes as separate video and sound, and joining "
+                    "them needs ffmpeg, which was not found.\n"
+                    "Install ffmpeg and put it on your PATH, or use the bundled .exe build."
+                )
 
             # Anything other than a 403 up front is a genuine failure (private
             # video, bad URL, disk full) and another client will not help.

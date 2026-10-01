@@ -12,6 +12,7 @@ _EXTRA_DEFAULTS = {
     "output_dir": DEFAULT_DOWNLOAD_DIR,
     "appearance": "System",
     "auto_update_engine": True,
+    "notify_when_done": True,
     "show_log": False,
 }
 

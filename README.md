@@ -1,3 +1,5 @@
+<img src="assets/logo.svg" width="96" alt="Converterw logo">
+
 # Converterw
 
 A YouTube to MP3 / MP4 converter with both a graphical interface and a command-line tool.
@@ -11,7 +13,11 @@ Built with Python because I wanted a local tool instead of relying on online con
 - Trim: download only part of a video by start/end time
 - Playlists: a playlist link downloads the whole list (or a range like `1-5,8`) into its own
   folder, while a video link that merely carries `&list=` downloads just that video
+- Several links at once: paste a whole list, and they download one after another. If
+  some fail, only those stay in the list, ready to try again
 - Live progress with speed and ETA, and a cancel button
+- When a download finishes while you're in another window, a desktop notification
+  tells you, and **Show in folder** jumps straight to the file
 - **Keeps its own downloader engine up to date, so it doesn't break every few weeks**
 - Windows: a portable `.exe` with ffmpeg and yt-dlp bundled inside
 - Linux / macOS / Windows: a `converterw` command you can install with `pip`
@@ -35,7 +41,9 @@ Or with plain pip:
 pip install git+https://github.com/teterw/Converterw.git
 ```
 
-You also need **ffmpeg** for audio extraction, trimming and merging high-quality video:
+You also need **ffmpeg** for audio extraction, trimming, SponsorBlock, embedding cover art
+and tags, and merging high-quality video. Without it, video still downloads, but only as a
+ready-made single file (usually 360p at most):
 
 ```sh
 sudo apt install ffmpeg        # Debian / Ubuntu
@@ -89,6 +97,12 @@ converterw https://youtu.be/VIDEO --start 1:30 --end 2:15
 # first five entries of a playlist, into ~/Music
 converterw "https://youtube.com/playlist?list=..." --items 1-5 -o ~/Music
 
+# several links, one after another
+converterw https://youtu.be/ONE https://youtu.be/TWO https://youtu.be/THREE --audio
+
+# a list of links kept in a file, one per line (# starts a comment)
+converterw --batch-file links.txt
+
 # what is this link, without downloading it
 converterw https://youtu.be/VIDEO --info
 ```
@@ -96,6 +110,7 @@ converterw https://youtu.be/VIDEO --info
 | Option | What it does |
 | --- | --- |
 | `-o, --output DIR` | Where to save (default: your Downloads folder) |
+| `--batch-file FILE` | Also download the links listed in `FILE` (`-` reads them from stdin) |
 | `--audio` | Extract audio instead of video |
 | `-q, --quality` | `best`, `2160p`/`4k`, `1440p`, `1080p`, `720p`, `480p`, `360p`, `240p` |
 | `-c, --container` | `mp4`, `mkv`, `webm` |
@@ -115,8 +130,16 @@ converterw https://youtu.be/VIDEO --info
 | `--quiet`, `--verbose` | Less / more output |
 | `--update-engine` | Fetch the newest yt-dlp now |
 
-`converterw --help` lists everything. Exit status is `0` on success, `1` on failure,
+`converterw --help` lists everything. Each saved file is printed as `Saved <path>`.
+Exit status is `0` on success, `1` if any link failed (the others are still downloaded),
 and `130` if you press Ctrl-C — so it slots into scripts like any other tool.
+
+### In the app
+
+Paste one link or a whole list into the links box. **Paste** adds the copied link to
+the list; once everything in it has downloaded, the next Paste starts a fresh one.
+**Enter** repeats whichever of Download Video / Download Audio you used last
+(**Shift+Enter** starts a new line).
 
 ---
 
@@ -171,6 +194,19 @@ Then `converterw --help` for the CLI, or `python main.py` for the GUI.
 
 When running from source the app uses `ffmpeg` from your `PATH` if it can't find a
 bundled copy in `vendor/ffmpeg/`, so install ffmpeg separately if you don't have it.
+
+### Running the tests
+
+```sh
+pip install -e ".[test]"
+pytest
+```
+
+The tests run offline in a couple of seconds: yt-dlp is swapped for a scripted fake,
+and the app's data folder is redirected to a temporary one, so your real settings and
+downloaded engine are never touched. They run on every push and pull request, every
+Monday against the newest yt-dlp, and before each release build. A failing test
+stops the release.
 
 ---
 

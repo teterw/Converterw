@@ -27,6 +27,15 @@ jobs:
           path: vendor/ffmpeg
           key: ffmpeg-win64-gpl
 
+      # Same --upgrade as build.ps1, so the tests run against the exact yt-dlp
+      # that is about to be bundled. A failing test stops the release.
+      - name: Run tests
+        shell: pwsh
+        run: |
+          pip install --upgrade -r requirements.txt pytest
+          if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+          pytest
+
       - name: Build Converterw.exe and package zip
         shell: pwsh
         run: ./build.ps1

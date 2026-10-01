@@ -5,9 +5,10 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import customtkinter as ctk  # noqa: E402
-from tkinter import filedialog, messagebox  # noqa: E402
+from tkinter import PhotoImage, filedialog, messagebox  # noqa: E402
 
 from converterw import config, engine  # noqa: E402
+from converterw.gui.notify import Notifier  # noqa: E402
 from converterw.paths import log_error  # noqa: E402
 from converterw.version import APP_NAME, __version__  # noqa: E402
 from converterw.youtube import (  # noqa: E402
@@ -16,14 +17,16 @@ from converterw.youtube import (  # noqa: E402
     COOKIE_BROWSERS,
     VIDEO_CONTAINERS,
     VIDEO_QUALITY_LABELS,
-    Cancelled,
     Downloader,
+    brief_error,
     format_duration,
     probe,
+    split_links,
 )
 
 PAD = 12
 MIN_WIDTH = 720
+ICON_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class ConverterwApp(ctk.CTk):
@@ -34,11 +37,21 @@ class ConverterwApp(ctk.CTk):
         self.downloader = None
         self.download_thread = None
         self.pending_engine_version = None
+        # (current link, number of links) while a batch runs, for the status line.
+        self.batch_position = (0, 1)
+        # Links that have downloaded fine this session: once everything in the
+        # box is one of these, the next Paste starts a fresh list.
+        self.done_links = set()
+        self.last_saved_file = None
+        self.notifier = Notifier(
+            self, os.path.join(ICON_DIR, "icon.ico") if sys.platform == "win32" else None
+        )
 
         ctk.set_appearance_mode(self.settings["appearance"])
         ctk.set_default_color_theme("blue")
 
         self.title(f"{APP_NAME} {__version__}")
+        self._set_window_icon()
 
         self._build_widgets()
         self._load_settings_into_widgets()
@@ -47,6 +60,23 @@ class ConverterwApp(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(300, self._start_engine_check)
+
+    def _set_window_icon(self):
+        """Show the app's own icon rather than CustomTkinter's.
+
+        On Windows this has to be iconbitmap: CustomTkinter puts its own icon
+        on the window shortly after start unless iconbitmap was called. Tk
+        elsewhere cannot read .ico files, so it gets the PNG instead.
+        """
+        try:
+            if sys.platform == "win32":
+                self.iconbitmap(os.path.join(ICON_DIR, "icon.ico"))
+            else:
+                # Kept on self: Tk drops the icon if the image is garbage collected.
+                self._icon_image = PhotoImage(file=os.path.join(ICON_DIR, "icon.png"))
+                self.iconphoto(True, self._icon_image)
+        except Exception:
+            pass  # Purely cosmetic; never stop the app from opening over it.
 
     # ----------------------------------------------------------------- layout
 
@@ -76,21 +106,39 @@ class ConverterwApp(ctk.CTk):
         self.engine_button.grid_remove()
 
     def _build_url_row(self):
-        ctk.CTkLabel(self, text="YouTube URL", anchor="w", font=ctk.CTkFont(size=14, weight="bold")
-                     ).pack(fill="x", padx=PAD, pady=(PAD, 4))
+        heading = ctk.CTkFrame(self, fg_color="transparent")
+        heading.pack(fill="x", padx=PAD, pady=(PAD, 4))
+        ctk.CTkLabel(heading, text="YouTube links", font=ctk.CTkFont(size=14, weight="bold")
+                     ).pack(side="left")
+        ctk.CTkLabel(heading, text="one per line - they download one after another",
+                     text_color=("gray40", "gray60"), font=ctk.CTkFont(size=11)
+                     ).pack(side="left", padx=(10, 0))
 
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", padx=PAD)
         row.grid_columnconfigure(0, weight=1)
 
-        self.url_entry = ctk.CTkEntry(row, placeholder_text="https://www.youtube.com/watch?v=...")
-        self.url_entry.grid(row=0, column=0, sticky="ew")
-        self.url_entry.bind("<Return>", lambda _event: self._start_download("video"))
+        # A textbox rather than an entry so a whole list can be pasted. Styled
+        # like the entries, since it does the same job.
+        entry_theme = ctk.ThemeManager.theme["CTkEntry"]
+        self.url_box = ctk.CTkTextbox(
+            row, height=68, wrap="none", border_width=entry_theme["border_width"],
+            border_color=entry_theme["border_color"], fg_color=entry_theme["fg_color"],
+        )
+        self.url_box.grid(row=0, column=0, sticky="ew")
+        # Enter repeats whichever download button was used last; Shift+Enter
+        # still starts a new line.
+        self.url_box.bind("<Return>", self._on_enter)
+        self.url_box.bind("<Shift-Return>", lambda _event: None)
 
-        ctk.CTkButton(row, text="Paste", width=70, command=self._paste_url
-                      ).grid(row=0, column=1, padx=(8, 0))
-        self.info_button = ctk.CTkButton(row, text="Info", width=70, command=self._fetch_info)
-        self.info_button.grid(row=0, column=2, padx=(8, 0))
+        buttons = ctk.CTkFrame(row, fg_color="transparent")
+        buttons.grid(row=0, column=1, sticky="n")
+        ctk.CTkButton(buttons, text="Paste", width=70, command=self._paste_url
+                      ).grid(row=0, column=0, padx=(8, 0))
+        self.info_button = ctk.CTkButton(buttons, text="Info", width=70, command=self._fetch_info)
+        self.info_button.grid(row=0, column=1, padx=(8, 0))
+        ctk.CTkButton(buttons, text="Clear", width=70, fg_color="gray40", hover_color="gray30",
+                      command=self._clear_links).grid(row=1, column=0, padx=(8, 0), pady=(8, 0))
 
         self.info_label = ctk.CTkLabel(
             self, text="", anchor="w", justify="left", text_color=("gray35", "gray65"),
@@ -306,13 +354,19 @@ class ConverterwApp(ctk.CTk):
         self._dropdown(tab, 2, "Appearance", ["System", "Light", "Dark"], self.appearance_var,
                        None).configure(command=self._change_appearance)
 
+        self.notify_var = ctk.BooleanVar()
+
         ctk.CTkCheckBox(tab, text="Automatically keep the downloader engine up to date",
                         variable=self.auto_update_var).grid(
             row=3, column=0, columnspan=3, sticky="w", pady=(12, 4)
         )
+        ctk.CTkCheckBox(tab, text="Notify me when a download finishes while I'm in another window",
+                        variable=self.notify_var).grid(
+            row=4, column=0, columnspan=3, sticky="w", pady=4
+        )
 
         buttons = ctk.CTkFrame(tab, fg_color="transparent")
-        buttons.grid(row=4, column=0, columnspan=3, sticky="w", pady=8)
+        buttons.grid(row=5, column=0, columnspan=3, sticky="w", pady=8)
         ctk.CTkButton(buttons, text="Update engine now", width=150,
                       command=lambda: self._update_engine(force=True)).pack(side="left")
         ctk.CTkButton(buttons, text="Reset engine", width=110, fg_color="gray40",
@@ -324,7 +378,7 @@ class ConverterwApp(ctk.CTk):
             tab,
             text=f"{APP_NAME} {__version__}   -   github.com/teterw/Converterw",
             anchor="w", text_color=("gray40", "gray60"), font=ctk.CTkFont(size=11),
-        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(12, 0))
 
     def _build_actions(self):
         actions = ctk.CTkFrame(self, fg_color="transparent")
@@ -359,8 +413,16 @@ class ConverterwApp(ctk.CTk):
                                       text_color=("#8a5a00", "#e0a33a"))
         self.trim_hint.pack(pady=(8, 0))
 
-        self.status_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=12))
-        self.status_label.pack()
+        # The status line, with a "Show in folder" button beside it once
+        # something has been saved.
+        self.status_row = ctk.CTkFrame(self, fg_color="transparent")
+        self.status_row.pack()
+        self.status_label = ctk.CTkLabel(self.status_row, text="", font=ctk.CTkFont(size=12))
+        self.status_label.pack(side="left")
+        self.reveal_button = ctk.CTkButton(
+            self.status_row, text="Show in folder", width=110, height=24,
+            font=ctk.CTkFont(size=12), command=self._reveal_last_saved,
+        )
 
     def _build_log(self):
         self.log_toggle = ctk.CTkButton(
@@ -399,6 +461,7 @@ class ConverterwApp(ctk.CTk):
         self.fragments_var.set(str(s["concurrent_fragments"]))
         self.appearance_var.set(s["appearance"])
         self.auto_update_var.set(s["auto_update_engine"])
+        self.notify_var.set(s["notify_when_done"])
         if s["show_log"]:
             self._toggle_log()
 
@@ -429,6 +492,7 @@ class ConverterwApp(ctk.CTk):
             "concurrent_fragments": fragments,
             "appearance": self.appearance_var.get(),
             "auto_update_engine": self.auto_update_var.get(),
+            "notify_when_done": self.notify_var.get(),
             "show_log": self.log_box.winfo_ismapped(),
             "mode": self.settings.get("mode", "video"),
         }
@@ -456,14 +520,38 @@ class ConverterwApp(ctk.CTk):
     def _change_appearance(self, value):
         ctk.set_appearance_mode(value)
 
+    def _links(self):
+        return split_links(self.url_box.get("1.0", "end"))
+
+    def _set_links(self, links):
+        self.url_box.delete("1.0", "end")
+        self.url_box.insert("1.0", "\n".join(links))
+
+    def _clear_links(self):
+        self.url_box.delete("1.0", "end")
+        self.info_label.configure(text="")
+        self._fit_window()
+
     def _paste_url(self):
+        """Add the copied link(s) to the list.
+
+        Once everything in the box has been downloaded, pasting starts a new
+        list instead, so downloading one video after another stays a matter of
+        Paste and Download - without fetching the previous one again.
+        """
         try:
-            text = self.clipboard_get().strip()
+            pasted = split_links(self.clipboard_get())
         except Exception:
             return
-        if text:
-            self.url_entry.delete(0, "end")
-            self.url_entry.insert(0, text)
+        current = self._links()
+        if not current or all(link in self.done_links for link in current):
+            self._set_links(pasted)
+        else:
+            self._set_links(current + [link for link in pasted if link not in current])
+
+    def _on_enter(self, _event):
+        self._start_download(self.settings.get("mode", "video"))
+        return "break"  # don't also add a new line
 
     def _browse_folder(self):
         path = filedialog.askdirectory(initialdir=self.out_entry.get().strip() or None)
@@ -493,35 +581,65 @@ class ConverterwApp(ctk.CTk):
         except OSError as error:
             messagebox.showerror("Could not open folder", str(error))
 
+    def _reveal_last_saved(self):
+        """Open the folder with the newest download selected in it."""
+        path = self.last_saved_file
+        if not path or not os.path.exists(path):
+            # Moved or deleted since: the folder is the next best thing.
+            self._open_path(os.path.dirname(path) if path else self.out_entry.get().strip())
+            return
+        try:
+            import subprocess
+
+            if sys.platform == "win32":
+                subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except OSError as error:
+            messagebox.showerror("Could not open folder", str(error))
+
     # ------------------------------------------------------------ video info
 
+    # Probing is a network round trip per link, so a long list is cut short.
+    _INFO_LIMIT = 5
+
     def _fetch_info(self):
-        url = self.url_entry.get().strip()
-        if not url:
+        links = self._links()
+        if not links:
             messagebox.showwarning("Missing URL", "Paste a YouTube link first.")
             return
 
         self.info_button.configure(state="disabled")
         self.info_label.configure(text="Loading video details...")
 
-        def task():
+        def describe(url):
             try:
                 info = probe(url)
             except Exception as error:
-                message = str(error).splitlines()[0] if str(error) else "Could not read that URL"
-                self.after(0, lambda: self.info_label.configure(text=message))
-            else:
-                if info["is_playlist"]:
-                    text = (f"Playlist: {info['title']}  -  {info['count']} videos  -  "
-                            f"{format_duration(info['duration'])} total")
-                else:
-                    text = (f"{info['title']}  -  {info['uploader']}  -  "
-                            f"{format_duration(info['duration'])}")
-                self.after(0, lambda: self.info_label.configure(text=text))
+                return brief_error(error) if str(error) else "Could not read that URL"
+            if info["is_playlist"]:
+                return (f"Playlist: {info['title']}  -  {info['count']} videos  -  "
+                        f"{format_duration(info['duration'])} total")
+            return f"{info['title']}  -  {info['uploader']}  -  {format_duration(info['duration'])}"
+
+        def task():
+            try:
+                lines = [describe(url) for url in links[:self._INFO_LIMIT]]
+                if len(links) > 1:
+                    lines = [f"{index + 1}.  {line}" for index, line in enumerate(lines)]
+                if len(links) > self._INFO_LIMIT:
+                    lines.append(f"...and {len(links) - self._INFO_LIMIT} more")
+                self.after(0, lambda: self._show_info("\n".join(lines)))
             finally:
                 self.after(0, lambda: self.info_button.configure(state="normal"))
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _show_info(self, text):
+        self.info_label.configure(text=text)
+        self._fit_window()  # several links make the label several lines tall
 
     # -------------------------------------------------------------- download
 
@@ -530,8 +648,9 @@ class ConverterwApp(ctk.CTk):
             self.video_button.grid_remove()
             self.audio_button.grid_remove()
             self.cancel_button.grid(row=0, column=0, columnspan=2, sticky="ew")
+            self.reveal_button.pack_forget()
             self.progress_bar.set(0)
-            self.progress_bar.pack(fill="x", padx=PAD, pady=(8, 0), before=self.status_label)
+            self.progress_bar.pack(fill="x", padx=PAD, pady=(8, 0), before=self.status_row)
         else:
             self.cancel_button.grid_remove()
             self.video_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
@@ -540,15 +659,22 @@ class ConverterwApp(ctk.CTk):
         # The progress bar appearing changes how tall the window needs to be.
         self._fit_window()
 
+    def _status_prefix(self):
+        """The "[2/5]" in front of the status while working through several links."""
+        index, total = self.batch_position
+        return f"[{index + 1}/{total}]  " if total > 1 else ""
+
     def _update_progress(self, data):
         def apply():
             self.progress_bar.set(data["percent"])
             if data["status"] == "processing":
-                self.status_label.configure(text=f"Converting {data['filename']}...")
+                self.status_label.configure(
+                    text=f"{self._status_prefix()}Converting {data['filename']}..."
+                )
             else:
                 self.status_label.configure(
-                    text=f"{int(data['percent'] * 100)}%  -  {data['size']}  -  "
-                         f"{data['speed']}  -  ETA {data['eta']}"
+                    text=f"{self._status_prefix()}{int(data['percent'] * 100)}%  -  "
+                         f"{data['size']}  -  {data['speed']}  -  ETA {data['eta']}"
                 )
 
         self.after(0, apply)
@@ -557,9 +683,9 @@ class ConverterwApp(ctk.CTk):
         if self.download_thread and self.download_thread.is_alive():
             return
 
-        url = self.url_entry.get().strip()
+        links = self._links()
         out_dir = self.out_entry.get().strip()
-        if not url:
+        if not links:
             messagebox.showwarning("Missing URL", "Paste a YouTube link first.")
             return
         if not out_dir:
@@ -577,40 +703,104 @@ class ConverterwApp(ctk.CTk):
             progress_callback=self._update_progress, log_callback=self._log
         )
 
+        self.batch_position = (0, len(links))
         self._set_busy(True)
-        self.status_label.configure(text="Starting...")
-        self._log(f"--- {mode} download: {url}")
+        self.status_label.configure(text=f"{self._status_prefix()}Starting...")
+
+        def on_start(index, url):
+            self.batch_position = (index, len(links))
+            self._log(f"--- {mode} download: {url}")
+
+            def reset():
+                self.progress_bar.set(0)
+                self.status_label.configure(text=f"{self._status_prefix()}Starting...")
+
+            self.after(0, reset)
 
         def task():
+            batch = None
             try:
-                result = self.downloader.run(url, out_dir, options)
-            except Cancelled:
-                self.after(0, lambda: self.status_label.configure(text="Cancelled."))
-                self._log("--- cancelled")
-            except Exception as error:
-                message = str(error)
-                log_error(message, context=f"{mode} download: {url}\noptions: {options}")
-                self._log(f"--- failed: {message.splitlines()[0] if message else 'unknown error'}")
-                self.after(0, lambda: messagebox.showerror("Download failed", message))
-                self.after(0, lambda: self.status_label.configure(text="Failed."))
-            else:
-                self.after(0, lambda: self._finish(result))
+                batch = self.downloader.run_all(links, out_dir, options, on_start=on_start)
             finally:
                 self.after(0, lambda: self._set_busy(False))
+                if batch is not None:
+                    self.after(0, lambda: self._finish(batch, links, mode, options))
 
         self.download_thread = threading.Thread(target=task, daemon=True)
         self.download_thread.start()
 
-    def _finish(self, result):
-        count = result["completed"]
-        errors = result["errors"]
-        noun = "file" if count == 1 else "files"
-        if errors:
-            self.status_label.configure(text=f"Done - {count} {noun}, {len(errors)} skipped.")
-            self._log(f"--- finished with {len(errors)} error(s); see above")
+    def _finish(self, batch, links, mode, options):
+        succeeded = [url for url, _result in batch.done]
+        self.done_links.update(succeeded)
+        for url, message in batch.failed:
+            log_error(message, context=f"{mode} download: {url}\noptions: {options}")
+            self._log(f"--- failed: {url}: {brief_error(message)}")
+
+        # When part of a list didn't make it, leave just that part in the box,
+        # so trying again doesn't fetch the finished ones a second time.
+        unfinished = [url for url in links if url not in succeeded]
+        if len(links) > 1 and unfinished:
+            self._set_links(unfinished)
+
+        if batch.files:
+            self.last_saved_file = batch.files[-1]
+            self.reveal_button.pack(side="left", padx=(10, 0))
+
+        if batch.cancelled:
+            if len(links) > 1 and succeeded:
+                status = f"Cancelled after {len(succeeded)} of {len(links)} links."
+            else:
+                status = "Cancelled."
+            self._log("--- cancelled")
+        elif not succeeded:
+            status = "Failed." if len(links) == 1 else f"All {len(links)} links failed."
         else:
-            self.status_label.configure(text=f"Done - {count} {noun} saved.")
+            status = batch.summary(len(links))
             self._log("--- finished")
+        self.status_label.configure(text=status)
+        self._fit_window()
+
+        if not batch.cancelled:
+            self._notify(batch, links)
+        if batch.failed:
+            self._show_failures(batch, links)
+
+    def _notify(self, batch, links):
+        """Tell the user, if they have gone off to do something else meanwhile."""
+        if not self.notify_var.get() or self.notifier.window_is_active():
+            return
+        if not batch.done:
+            title = "Download failed"
+            message = (brief_error(batch.failed[0][1]) if len(links) == 1
+                       else f"All {len(links)} links failed.")
+        else:
+            title = "Download finished" if len(links) == 1 else "Downloads finished"
+            if batch.failed:
+                title += " with errors"
+            if len(links) == 1 and len(batch.files) == 1:
+                message = f"Saved {os.path.basename(batch.files[0])}"
+            else:
+                message = batch.summary(len(links))
+        self.notifier.show(title, message)
+
+    # A failure dialog listing more links than this would not fit on screen.
+    _FAILURES_SHOWN = 8
+
+    def _show_failures(self, batch, links):
+        if len(links) == 1:
+            messagebox.showerror("Download failed", batch.failed[0][1])
+            return
+
+        lines = [f"{url}\n      {brief_error(message)}"
+                 for url, message in batch.failed[:self._FAILURES_SHOWN]]
+        if len(batch.failed) > self._FAILURES_SHOWN:
+            lines.append(f"...and {len(batch.failed) - self._FAILURES_SHOWN} more")
+        messagebox.showerror(
+            "Some downloads failed",
+            f"{len(batch.failed)} of {len(links)} links failed:\n\n" + "\n\n".join(lines)
+            + "\n\nThey are left in the box, so Download tries just those again. "
+              "Full details are in errors.log (Advanced > Open data folder).",
+        )
 
     def _cancel_download(self):
         if self.downloader:
@@ -701,6 +891,7 @@ class ConverterwApp(ctk.CTk):
 
     def _restart(self):
         config.save(self._collect_settings())
+        self.notifier.close()
         engine.restart_app()
         self.destroy()
 
@@ -713,8 +904,27 @@ class ConverterwApp(ctk.CTk):
             if self.downloader:
                 self.downloader.cancel()
         config.save(self._collect_settings())
+        self.notifier.close()
         self.destroy()
 
 
+def _set_windows_app_id():
+    """Run from source, Windows groups the window under python.exe and shows
+    Python's icon in the taskbar. An app ID of its own makes it use ours.
+
+    Not done for the .exe, which already carries the icon - an explicit ID
+    there would split it from a copy the user has pinned to the taskbar.
+    """
+    if sys.platform != "win32" or getattr(sys, "frozen", False):
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f"teterw.{APP_NAME}")
+    except Exception:
+        pass
+
+
 def run_app():
+    _set_windows_app_id()
     ConverterwApp().mainloop()

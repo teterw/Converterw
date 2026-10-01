@@ -27,6 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["customtkinter>=6.0.0"]
+test = ["pytest>=8"]
 
 [project.urls]
 Homepage = "https://github.com/teterw/Converterw"
@@ -41,5 +42,13 @@ converterw-gui = "converterw.gui.app:run_app"
 [tool.setuptools]
 packages = ["converterw", "converterw.gui"]
 
+[tool.setuptools.package-data]
+"converterw.gui" = ["icon.ico", "icon.png"]
+
 [tool.setuptools.dynamic]
 version = { attr = "converterw.version.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Lets `pytest` run straight from a checkout, without `pip install -e .` first.
+pythonpath = ["."]

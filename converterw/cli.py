@@ -4,6 +4,7 @@ Installed as `converterw`, so it behaves like any other terminal tool:
 
     converterw https://youtu.be/VIDEO -q 1080p
     converterw https://youtu.be/VIDEO --audio -a mp3 -b 320
+    converterw URL1 URL2 URL3
 """
 
 import argparse
@@ -17,13 +18,15 @@ from converterw.youtube import (
     AUDIO_FORMATS,
     COOKIE_BROWSERS,
     DEFAULT_DOWNLOAD_DIR,
+    NO_FFMPEG_NOTE,
     VIDEO_CONTAINERS,
-    Cancelled,
     Downloader,
     Options,
+    brief_error,
     format_duration,
     has_ffmpeg,
     probe,
+    split_links,
 )
 
 # The GUI shows friendly labels; the CLI takes short ones people would type.
@@ -59,12 +62,18 @@ def build_parser():
             "  converterw https://youtu.be/VIDEO --audio -a mp3 -b 320\n"
             "  converterw https://youtu.be/VIDEO --start 1:30 --end 2:15\n"
             "  converterw PLAYLIST_URL --items 1-5 -o ~/Music\n"
+            "  converterw URL1 URL2 URL3 --audio\n"
+            "  converterw --batch-file links.txt\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("url", nargs="?", help="YouTube video or playlist URL")
+    parser.add_argument("urls", nargs="*", metavar="URL",
+                        help="YouTube video or playlist links - as many as you like")
     parser.add_argument("-o", "--output", metavar="DIR", default=None,
                         help=f"where to save (default: {DEFAULT_DOWNLOAD_DIR})")
+    parser.add_argument("--batch-file", metavar="FILE",
+                        help="also read links from FILE, one per line ('-' reads them "
+                             "from stdin); lines starting with # are skipped")
 
     what = parser.add_argument_group("what to download")
     what.add_argument("--audio", action="store_true", help="extract audio instead of video")
@@ -194,17 +203,45 @@ def _run_engine_update():
     return 0
 
 
-def _print_info(url):
-    info = probe(url)
-    if info["is_playlist"]:
-        print(f"Playlist: {info['title']}")
-        print(f"Videos:   {info['count']}")
-        print(f"Total:    {format_duration(info['duration'])}")
+def read_batch_file(path):
+    """Links from a file, one or more per line. Blank lines and lines starting
+    with # are skipped, as in yt-dlp's own batch files."""
+    if path == "-":
+        text = sys.stdin.read()
     else:
-        print(f"Title:    {info['title']}")
-        print(f"Channel:  {info['uploader']}")
-        print(f"Duration: {format_duration(info['duration'])}")
-    return 0
+        with open(os.path.expanduser(path), encoding="utf-8-sig") as handle:
+            text = handle.read()
+
+    links = []
+    for line in text.splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            links.extend(split_links(line))
+    return links
+
+
+def _print_info(urls):
+    """Details of each link; exits 1 if any of them could not be read."""
+    failed = False
+    for index, url in enumerate(urls):
+        if len(urls) > 1:
+            if index:
+                print()
+            print(f"[{index + 1}/{len(urls)}] {url}")
+        try:
+            info = probe(url)
+        except Exception as error:
+            print(f"error: {str(error).splitlines()[0]}", file=sys.stderr)
+            failed = True
+            continue
+        if info["is_playlist"]:
+            print(f"Playlist: {info['title']}")
+            print(f"Videos:   {info['count']}")
+            print(f"Total:    {format_duration(info['duration'])}")
+        else:
+            print(f"Title:    {info['title']}")
+            print(f"Channel:  {info['uploader']}")
+            print(f"Duration: {format_duration(info['duration'])}")
+    return 1 if failed else 0
 
 
 def _install_sigint_handler(downloader):
@@ -231,66 +268,85 @@ def main(argv=None):
         print("Engine reset; the bundled yt-dlp will be used from the next run.")
         return 0
 
-    if not args.url:
+    urls = list(args.urls)
+    if args.batch_file:
+        try:
+            urls += read_batch_file(args.batch_file)
+        except OSError as error:
+            print(f"error: could not read {args.batch_file}: {error.strerror or error}",
+                  file=sys.stderr)
+            return 1
+        if not urls:
+            print(f"error: no links found in {args.batch_file}", file=sys.stderr)
+            return 1
+    urls = list(dict.fromkeys(urls))  # the same link twice would only download twice
+
+    if not urls:
         parser.print_help()
         return 2
 
-    try:
-        if args.info:
-            return _print_info(args.url)
-    except Exception as error:
-        print(f"error: {str(error).splitlines()[0]}", file=sys.stderr)
-        return 1
+    if args.info:
+        return _print_info(urls)
 
     out_dir = os.path.expanduser(args.output or DEFAULT_DOWNLOAD_DIR)
     options = options_from_args(args)
 
     if not has_ffmpeg():
         needs_ffmpeg = args.audio or options.trim_enabled or args.sponsorblock
-        message = "ffmpeg was not found on your PATH"
         if needs_ffmpeg:
-            print(f"error: {message}, and it is required for this download.", file=sys.stderr)
+            print("error: ffmpeg was not found on your PATH, and it is required for this "
+                  "download.", file=sys.stderr)
             print("       Install it with your package manager, e.g. "
                   "'sudo apt install ffmpeg'.", file=sys.stderr)
             return 1
         if not args.quiet:
-            print(f"warning: {message}; video and audio cannot be merged, so quality "
-                  "may be limited.", file=sys.stderr)
+            print(f"warning: {NO_FFMPEG_NOTE}", file=sys.stderr)
 
     progress = ProgressPrinter(quiet=args.quiet)
     log = (lambda message: print(message, file=sys.stderr)) if args.verbose else None
     downloader = Downloader(progress_callback=progress, log_callback=log)
     _install_sigint_handler(downloader)
 
+    # Output is flushed as it goes, so it stays in order around stderr when
+    # both are piped into the same log.
+    what = "audio" if args.audio else "video"
     if not args.quiet:
-        what = "audio" if args.audio else "video"
-        print(f"Downloading {what} to {out_dir}")
+        print(f"Downloading {what} to {out_dir}", flush=True)
+
+    def on_start(index, url):
+        if len(urls) > 1 and not args.quiet:
+            progress.done()
+            print(f"[{index + 1}/{len(urls)}] {url}", flush=True)
 
     try:
-        result = downloader.run(args.url, out_dir, options)
-    except Cancelled:
-        progress.done()
-        print("Cancelled.", file=sys.stderr)
-        return 130
+        batch = downloader.run_all(urls, out_dir, options, on_start=on_start)
     except KeyboardInterrupt:
-        progress.done()
-        print("Cancelled.", file=sys.stderr)
-        return 130
-    except (ValueError, RuntimeError) as error:
-        progress.done()
-        log_error(str(error), context=f"{'audio' if args.audio else 'video'} download: {args.url}")
-        print(f"error: {error}", file=sys.stderr)
-        return 1
-
+        batch = None
     progress.done()
-    if not args.quiet:
-        count = result["completed"]
-        noun = "file" if count == 1 else "files"
-        if result["errors"]:
-            print(f"Done - {count} {noun} saved, {len(result['errors'])} skipped.")
+
+    if batch is None or batch.cancelled:
+        finished = len(batch.done) if batch else 0
+        if len(urls) > 1 and finished:
+            print(f"Cancelled after {finished} of {len(urls)} links.", file=sys.stderr)
         else:
-            print(f"Done - {count} {noun} saved.")
-    return 0
+            print("Cancelled.", file=sys.stderr)
+        return 130
+
+    if not args.quiet:
+        for path in batch.files:
+            print(f"Saved {path}")
+        sys.stdout.flush()
+
+    for url, message in batch.failed:
+        log_error(message, context=f"{what} download: {url}")
+        if len(urls) == 1:
+            print(f"error: {message}", file=sys.stderr)
+        else:
+            print(f"error: {url}\n       {brief_error(message)}", file=sys.stderr)
+
+    if not args.quiet and batch.done:
+        print(batch.summary(len(urls)))
+    return 1 if batch.failed else 0
 
 
 def entry_point():
